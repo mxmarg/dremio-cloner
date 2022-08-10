@@ -104,6 +104,8 @@ class DremioCloud:
 	def get_catalog_entity_by_path(self, path, report_error=True):
 		if path[0] == '/':
 			path = path[1:]
+		if '#' in path:
+			path = path.replace("#", "%23")
 		url = self._url_prefix + self._project_id + self._catalog_url_by_path + path
 		return self._api_get_json(url, source="get_catalog_entity_by_path", report_error=report_error)
 
@@ -405,7 +407,7 @@ class DremioCloud:
 				logging.critical(source + ": received HTTP Response Code " + str(response.status_code) +
 								 " for : <" + str(url) + ">" + self._get_error_message(response))
 				raise RuntimeError(
-					"Specified user does not have sufficient priviliges to create objects in the target Dremio Environment.")
+					"Specified user does not have sufficient privileges to create objects in the target Dremio Environment.")
 			else:
 				if report_error:
 					logging.error(source + ": received HTTP Response Code " + str(response.status_code) +
