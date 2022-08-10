@@ -171,9 +171,8 @@ class DremioCloud:
 		return self._api_get_json(url, source="list_votes")
 
 	# This method has to be refactored when DX-16597 is resolved
-	def list_pds(self, sources,
-				 source_folder_filter=None, source_folder_filter_paths=None, source_folder_exclude_filter=None,
-				 pds_filter=None, pds_exclude_filter=None, pds_error_list=None):
+	def list_pds(self, sources, source_folder_filter=None, source_folder_filter_paths=None,
+				 source_folder_exclude_filter=None, pds_filter=None, pds_exclude_filter=None, pds_error_list=None):
 		pds_list = []
 		# Check filters for complete PDS suppression
 		if not sources:
@@ -189,7 +188,20 @@ class DremioCloud:
 
 		if source_folder_filter is not None and source_folder_filter != "*":
 			source_folder_filter = source_folder_filter.replace("*", "%")
-			sql = sql + " and TABLE_SCHEMA like '%." + source_folder_filter + "'"
+			source_folder_filter = source_folder_filter.replace("/", ".")
+			sql = sql + " and TABLE_SCHEMA like '%." + source_folder_filter + "%'"
+
+		if source_folder_filter_paths is not None and source_folder_filter_paths != []:
+			sql = sql + " and ("
+			first_path = True
+			for source_folder_filter_path in source_folder_filter_paths:
+				if not first_path:
+					sql = sql + ' or '
+				source_folder_filter_path = source_folder_filter_path.replace("*", "%")
+				source_folder_filter_path = source_folder_filter_path.replace("/", ".")
+				sql = sql + " TABLE_SCHEMA like '%." + source_folder_filter_path + "%'"
+				first_path = False
+			sql = sql + ') '
 
 		if source_folder_exclude_filter is not None:
 			source_folder_exclude_filter = source_folder_exclude_filter.replace("*", "%")
@@ -228,16 +240,20 @@ class DremioCloud:
 		for i in range(0, int(num_rows / limit) + 1):
 			logging.info("list_pds: processing batch " + str(i + 1))
 			job_result = self.get_job_result(jobid, limit * i, limit)
-			for row in job_result['rows']:
-				# The schema (path) is denormalized: instead of abc/ab.c/abc it has abc.ab.c.abc, we need to recover it
-				normalized_path = self._normalize_schema(row['TABLE_SCHEMA'])
-				entity = self.get_catalog_entity_by_path(normalized_path + row['TABLE_NAME'])
-				if entity is None:
-					if pds_error_list is not None:
-						pds_error_list.append({"name": row['TABLE_NAME'], "path": normalized_path})
-					logging.error("list_pds: error reading entity for: " + normalized_path + row['TABLE_NAME'] + " The SOURCE is likely not available at the moment. See DEBUG logging for more information.")
-				else:
-					pds_list.append(entity)
+			if job_result != None:
+				for row in job_result['rows']:
+					# The schema (path) is denormalized: instead of abc/ab.c/abc it has abc.ab.c.abc, we need to recover it
+					normalized_path = self._normalize_schema(row['TABLE_SCHEMA'])
+					entity = self.get_catalog_entity_by_path(normalized_path + row['TABLE_NAME'])
+					if entity is None:
+						if pds_error_list is not None:
+							pds_error_list.append({"name": row['TABLE_NAME'], "path": normalized_path})
+						logging.error("list_pds: error reading entity for: " + normalized_path + row['TABLE_NAME'] + " The SOURCE is likely not available at the moment. See DEBUG logging for more information.")
+					else:
+						pds_list.append(entity)
+			else:
+				logging.error("list_pds: error reading job result for jobId: " + jobid)
+
 		return pds_list
 
 	_cached_schemas = {}
@@ -507,6 +523,9 @@ class DremioCloud:
 		try:
 			response = requests.request("DELETE", self._endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
 			if response.status_code == 200:
+				if response.text == '':
+					# if text is empty then response.json() fails, e.g. delete reflections return 200 and empty text.
+					return None
 				return response.json()
 			elif response.status_code == 204:
 				return None
@@ -563,6 +582,7 @@ class DremioCloud:
 
 	def _encode_http_param(self, path):
 		if sys.version_info.major > 2:
-			return urllib.parse.quote_plus(path)
+			# handle spaces in non-promoted source or folder paths (want %20 for Dremio URLs rather than +)
+			return urllib.parse.quote_plus(urllib.parse.quote(path), safe='%')
 		else:
 			return urllib.quote_plus(path)
